@@ -1,11 +1,11 @@
-"""Conexión a la base de datos y modelo de la tabla `personas`."""
+"""Conexión a la base de datos y modelos de las tablas `personas` y `fichas_producto`."""
 
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import DateTime, String, create_engine
+from sqlalchemy import JSON, DateTime, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 # Carga las variables de .env (si existe) antes de leer la configuración.
@@ -40,6 +40,23 @@ class Persona(Base):
     telefono: Mapped[str] = mapped_column(String(20))
     email: Mapped[str] = mapped_column(String(254))
     genero: Mapped[str] = mapped_column(String(30))
+    creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class FichaGuardada(Base):
+    """Resultado de /ai_validator: la ficha que el LLM sacó de una página."""
+
+    __tablename__ = "fichas_producto"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    url: Mapped[str] = mapped_column(Text)
+    nombre: Mapped[str | None] = mapped_column(String(300))
+    marca: Mapped[str | None] = mapped_column(String(120))
+    # La ficha completa (especificaciones, precio, resumen...) en una columna JSON.
+    ficha: Mapped[dict] = mapped_column(JSON)
+    modelo_llm: Mapped[str] = mapped_column(String(120))
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

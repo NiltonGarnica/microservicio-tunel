@@ -1,4 +1,4 @@
-"""Rutas del microservicio: /health, /suma y /process."""
+"""Rutas del microservicio: /health, /suma, /process y /ai_validator."""
 
 import math
 import os
@@ -10,12 +10,14 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 from scalar_fastapi import get_scalar_api_reference
 from sqlalchemy.orm import Session
 
 # Importar database primero: es quien carga el archivo .env.
-from database import Persona, crear_tablas, get_db
+from database import FichaGuardada, Persona, crear_tablas, get_db
+import ai_validator
+from ai_validator import ErrorDelLLM, ErrorDePagina, FichaProducto, LLMNoConfigurado
 
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
 if not API_BEARER_TOKEN:
@@ -131,6 +133,25 @@ class PersonaCreada(BaseModel):
     id: int
 
 
+class ValidarEntrada(BaseModel):
+    url: AnyHttpUrl
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "url": "https://www.amd.com/es/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7600-xt.html"
+            }
+        }
+    )
+
+
+class ValidarSalida(BaseModel):
+    id: int
+    url: str
+    modelo_llm: str
+    ficha: FichaProducto
+
+
 # ---------- Rutas ----------
 
 
@@ -175,3 +196,50 @@ def process(datos: PersonaEntrada, db: Annotated[Session, Depends(get_db)]):
     db.add(persona)
     db.commit()  # aquí se ejecuta el INSERT y la base genera el id
     return {"id": persona.id}
+
+
+@app.post(
+    "/ai_validator",
+    response_model=ValidarSalida,
+    status_code=status.HTTP_201_CREATED,
+    tags=["protegido"],
+    dependencies=[Depends(verificar_token)],
+    responses={
+        422: {"description": "La URL no es válida o no se pudo leer la página"},
+        502: {"description": "El LLM falló o respondió algo inválido"},
+        503: {"description": "Falta configurar OPENROUTER_API_KEY"},
+    },
+)
+def validar_con_ia(datos: ValidarEntrada, db: Annotated[Session, Depends(get_db)]):
+    """Descarga la página, le pide su ficha de producto al LLM y la guarda.
+
+    Es síncrona: responde cuando la ficha ya está guardada (puede tardar varios segundos).
+    """
+    # 1. Descargar la página y quedarse con su texto visible.
+    try:
+        url_final, texto = ai_validator.descargar_pagina(str(datos.url))
+    except ErrorDePagina as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # 2. Pedirle la ficha al LLM de OpenRouter.
+    try:
+        ficha = ai_validator.pedir_ficha(url_final, texto)
+    except LLMNoConfigurado as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ErrorDelLLM as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # 3. Guardar el resultado en la base de datos.
+    modelo = ai_validator.modelo_configurado()
+    guardada = FichaGuardada(
+        url=url_final,
+        nombre=ficha.nombre,
+        marca=ficha.marca,
+        ficha=ficha.model_dump(),
+        modelo_llm=modelo,
+    )
+    db.add(guardada)
+    db.commit()
+
+    # 4. Responder con la ficha y su id en la base.
+    return {"id": guardada.id, "url": url_final, "modelo_llm": modelo, "ficha": ficha}
