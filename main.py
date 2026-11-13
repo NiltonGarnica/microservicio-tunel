@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
+from scalar_fastapi import get_scalar_api_reference
 from sqlalchemy.orm import Session
 
 # Importar database primero: es quien carga el archivo .env.
@@ -136,6 +137,13 @@ class PersonaCreada(BaseModel):
 @app.get("/health", tags=["público"])
 def health():
     return {"status": "ok"}
+
+
+# Otra página de documentación, como /docs, que lee el mismo /openapi.json.
+# include_in_schema=False: es una página para personas, no una ruta de la API.
+@app.get("/scalar", include_in_schema=False)
+def scalar():
+    return get_scalar_api_reference(openapi_url=app.openapi_url, title=app.title)
 
 
 @app.post(

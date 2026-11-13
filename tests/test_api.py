@@ -39,6 +39,12 @@ def test_health(cliente):
     assert cliente.get("/health").json() == {"status": "ok"}
 
 
+def test_scalar_muestra_la_documentacion(cliente):
+    r = cliente.get("/scalar")
+    assert r.status_code == 200
+    assert "/openapi.json" in r.text
+
+
 def test_suma(cliente):
     r = cliente.post("/suma", json={"a": 3, "b": 5.2}, headers=AUTH)
     assert r.status_code == 200
