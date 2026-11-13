@@ -1,11 +1,11 @@
-"""Conexión a la base de datos y modelos de las tablas `personas` y `fichas_producto`."""
+"""Conexión a la base de datos y modelos de las tablas `personas`, `validaciones` y `webhooks_recibidos`."""
 
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import JSON, DateTime, String, Text, create_engine
+from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 # Carga las variables de .env (si existe) antes de leer la configuración.
@@ -45,19 +45,37 @@ class Persona(Base):
     )
 
 
-class FichaGuardada(Base):
-    """Resultado de /ai_validator: la ficha que el LLM sacó de una página."""
+class Validacion(Base):
+    """Un trabajo de /ai_validator: pendiente -> procesando -> completado o fallido."""
 
-    __tablename__ = "fichas_producto"
+    __tablename__ = "validaciones"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     url: Mapped[str] = mapped_column(Text)
-    nombre: Mapped[str | None] = mapped_column(String(300))
-    marca: Mapped[str | None] = mapped_column(String(120))
+    webhook_url: Mapped[str] = mapped_column(Text)
+    estado: Mapped[str] = mapped_column(String(20), default="pendiente")
     # La ficha completa (especificaciones, precio, resumen...) en una columna JSON.
-    ficha: Mapped[dict] = mapped_column(JSON)
-    modelo_llm: Mapped[str] = mapped_column(String(120))
+    ficha: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    modelo_llm: Mapped[str | None] = mapped_column(String(120))
+    webhook_estado: Mapped[str | None] = mapped_column(String(300))
+    webhook_intentos: Mapped[int] = mapped_column(Integer, default=0)
     creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    terminado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookRecibido(Base):
+    """Avisos que llegan a /webhook_demo, el receptor de prueba."""
+
+    __tablename__ = "webhooks_recibidos"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    trabajo_id: Mapped[int | None] = mapped_column(Integer)
+    firma_valida: Mapped[bool]
+    cuerpo: Mapped[dict] = mapped_column(JSON)
+    recibido_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 

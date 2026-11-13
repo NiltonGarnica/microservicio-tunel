@@ -1,12 +1,14 @@
-"""Rutas del microservicio: /health, /suma, /process y /ai_validator."""
+"""Rutas del microservicio: /health, /suma, /process, /ai_validator y /webhook_demo."""
 
+import hmac
+import json
 import math
 import os
 import secrets
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,9 +17,9 @@ from scalar_fastapi import get_scalar_api_reference
 from sqlalchemy.orm import Session
 
 # Importar database primero: es quien carga el archivo .env.
-from database import FichaGuardada, Persona, crear_tablas, get_db
+from database import Persona, SessionLocal, Validacion, WebhookRecibido, crear_tablas, get_db
 import ai_validator
-from ai_validator import ErrorDelLLM, ErrorDePagina, FichaProducto, LLMNoConfigurado
+from ai_validator import ErrorDePagina, FichaProducto
 
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "").strip()
 if not API_BEARER_TOKEN:
@@ -134,22 +136,38 @@ class PersonaCreada(BaseModel):
 
 
 class ValidarEntrada(BaseModel):
-    url: AnyHttpUrl
+    url: AnyHttpUrl = Field(description="Página del producto a analizar")
+    webhook_url: AnyHttpUrl = Field(description="Dónde avisar cuando el trabajo termine")
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "url": "https://www.amd.com/es/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7600-xt.html"
+                "url": "https://www.amd.com/es/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7600-xt.html",
+                "webhook_url": "http://127.0.0.1:8000/webhook_demo",
             }
         }
     )
 
 
-class ValidarSalida(BaseModel):
+class TrabajoCreado(BaseModel):
+    id: int
+    estado: str
+    consultar_en: str
+
+
+class TrabajoEstado(BaseModel):
+    # from_attributes: se puede crear directamente desde un objeto del ORM (Validacion).
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     url: str
-    modelo_llm: str
-    ficha: FichaProducto
+    estado: str
+    modelo_llm: str | None
+    ficha: FichaProducto | None
+    error: str | None
+    webhook_url: str
+    webhook_estado: str | None
+    webhook_intentos: int
 
 
 # ---------- Rutas ----------
@@ -200,46 +218,84 @@ def process(datos: PersonaEntrada, db: Annotated[Session, Depends(get_db)]):
 
 @app.post(
     "/ai_validator",
-    response_model=ValidarSalida,
-    status_code=status.HTTP_201_CREATED,
+    response_model=TrabajoCreado,
+    status_code=status.HTTP_202_ACCEPTED,
     tags=["protegido"],
     dependencies=[Depends(verificar_token)],
-    responses={
-        422: {"description": "La URL no es válida o no se pudo leer la página"},
-        502: {"description": "El LLM falló o respondió algo inválido"},
-        503: {"description": "Falta configurar OPENROUTER_API_KEY"},
-    },
+    responses={422: {"description": "La URL o el webhook no son válidos"}},
 )
-def validar_con_ia(datos: ValidarEntrada, db: Annotated[Session, Depends(get_db)]):
-    """Descarga la página, le pide su ficha de producto al LLM y la guarda.
+def validar_con_ia(
+    datos: ValidarEntrada,
+    tareas: BackgroundTasks,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Recibe el trabajo y responde al instante (202). El resultado llega al webhook.
 
-    Es síncrona: responde cuando la ficha ya está guardada (puede tardar varios segundos).
+    En segundo plano: Lightpanda obtiene el DOM -> el LLM saca la ficha ->
+    se guarda en la base -> se envía el resultado a `webhook_url`.
     """
-    # 1. Descargar la página y quedarse con su texto visible.
     try:
-        url_final, texto = ai_validator.descargar_pagina(str(datos.url))
+        ai_validator.verificar_host_publico(str(datos.url))
+        ai_validator.verificar_webhook_url(str(datos.webhook_url))
     except ErrorDePagina as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # 2. Pedirle la ficha al LLM de OpenRouter.
-    try:
-        ficha = ai_validator.pedir_ficha(url_final, texto)
-    except LLMNoConfigurado as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ErrorDelLLM as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    # 3. Guardar el resultado en la base de datos.
-    modelo = ai_validator.modelo_configurado()
-    guardada = FichaGuardada(
-        url=url_final,
-        nombre=ficha.nombre,
-        marca=ficha.marca,
-        ficha=ficha.model_dump(),
-        modelo_llm=modelo,
-    )
-    db.add(guardada)
+    trabajo = Validacion(url=str(datos.url), webhook_url=str(datos.webhook_url))
+    db.add(trabajo)
     db.commit()
 
-    # 4. Responder con la ficha y su id en la base.
-    return {"id": guardada.id, "url": url_final, "modelo_llm": modelo, "ficha": ficha}
+    # FastAPI lo ejecuta DESPUÉS de enviar la respuesta: quien llamó no espera.
+    tareas.add_task(ai_validator.procesar_validacion, trabajo.id)
+    return {"id": trabajo.id, "estado": trabajo.estado, "consultar_en": f"/ai_validator/{trabajo.id}"}
+
+
+@app.get(
+    "/ai_validator/{trabajo_id}",
+    response_model=TrabajoEstado,
+    tags=["protegido"],
+    dependencies=[Depends(verificar_token)],
+)
+def estado_de_validacion(trabajo_id: int, db: Annotated[Session, Depends(get_db)]):
+    """Consulta cómo va un trabajo, por si el webhook no llegó."""
+    trabajo = db.get(Validacion, trabajo_id)
+    if trabajo is None:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    return trabajo
+
+
+# ---------- Receptor de prueba ----------
+
+
+@app.post("/webhook_demo", tags=["webhook de prueba"], status_code=200)
+async def recibir_webhook(
+    request: Request,
+    x_firma_sha256: Annotated[str | None, Header()] = None,
+):
+    """Simula al sistema que recibe el aviso de /ai_validator.
+
+    No usa Bearer token: quien envía un webhook no tiene tu token. En su lugar
+    se comprueba la firma X-Firma-Sha256 hecha con WEBHOOK_SECRET.
+    """
+    cuerpo = await request.body()
+    firma_valida = x_firma_sha256 is not None and hmac.compare_digest(
+        x_firma_sha256, ai_validator.firmar(cuerpo)
+    )
+    try:
+        datos = json.loads(cuerpo)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="El cuerpo no es JSON")
+    if not isinstance(datos, dict):
+        raise HTTPException(status_code=400, detail="El cuerpo debe ser un objeto JSON")
+
+    with SessionLocal() as db:
+        db.add(
+            WebhookRecibido(
+                trabajo_id=datos.get("id") if isinstance(datos.get("id"), int) else None,
+                firma_valida=firma_valida,
+                cuerpo=datos,
+            )
+        )
+        db.commit()
+    if not firma_valida:
+        raise HTTPException(status_code=401, detail="Firma inválida")
+    return {"recibido": True}

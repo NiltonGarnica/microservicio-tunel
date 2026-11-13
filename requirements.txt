@@ -4,6 +4,9 @@ pydantic[email]>=2.7,<3
 SQLAlchemy>=2.0,<3
 python-dotenv>=1.0,<2
 scalar-fastapi>=1.9,<2
+# Controla Lightpanda por CDP (no hace falta "playwright install": el navegador es Lightpanda)
+playwright>=1.48,<2
+httpx>=0.27,<1
 
 # --- Drivers de base de datos (SQLite no necesita ninguno) ---
 # PostgreSQL:
@@ -14,4 +17,3 @@ psycopg[binary]>=3.1,<4
 
 # --- Pruebas ---
 pytest>=8,<10
-httpx>=0.27,<1

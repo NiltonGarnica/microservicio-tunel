@@ -1,0 +1,20 @@
+# Lightpanda para /ai_validator: arranca con  docker compose up -d
+# La API se conecta por CDP a ws://127.0.0.1:9223 (LIGHTPANDA_CDP_URL en .env).
+services:
+  lightpanda:
+    image: lightpanda/browser:1.0.2
+    command:
+      - /bin/lightpanda
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9222"
+      # La página no puede pedir recursos a redes privadas (tu PC, tu router...).
+      - --block-private-networks
+    environment:
+      LIGHTPANDA_DISABLE_TELEMETRY: "true"
+    ports:
+      # Solo accesible desde tu PC. 9223 para no chocar con otro Lightpanda en 9222.
+      - "127.0.0.1:9223:9222"
+    restart: unless-stopped

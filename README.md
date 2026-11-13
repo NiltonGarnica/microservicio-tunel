@@ -8,11 +8,17 @@ API local para aprender a exponer un servicio a internet mediante un túnel.
 | `GET /docs` | Swagger UI para probar las rutas | Público |
 | `POST /suma` | Recibe `{"a": 3, "b": 5.2}` y devuelve `{"resultado": 8.2}` | Bearer token |
 | `POST /process` | Valida y guarda una persona en la tabla `personas`; responde `201` con el `id` | Bearer token |
+| `POST /ai_validator` | Recibe `url` y `webhook_url`, responde `202` al instante y envía la ficha del producto al webhook (sección 7) | Bearer token |
+| `GET /ai_validator/{id}` | Consulta el estado de un trabajo de `/ai_validator` | Bearer token |
+| `POST /webhook_demo` | Receptor de prueba: guarda los avisos en `webhooks_recibidos` | Firma `X-Firma-Sha256` |
+| `GET /scalar` | Otra página de documentación, como `/docs` | Público |
 
 Archivos:
 
 - `main.py`: rutas, validación con Pydantic y comprobación del Bearer token.
-- `database.py`: conexión con SQLAlchemy y modelo `Persona`.
+- `database.py`: conexión con SQLAlchemy y modelos `Persona`, `Validacion` y `WebhookRecibido`.
+- `ai_validator.py`: flujo de `/ai_validator`: Lightpanda, LLM, base de datos y webhook.
+- `docker-compose.yml`: levanta Lightpanda, el navegador que obtiene el DOM.
 - `preparar_postgres.py`: crea la base en PostgreSQL y copia los datos de SQLite (sección 5).
 - `tests/test_api.py`: pruebas automáticas de las rutas.
 - `.env.example`: plantilla de configuración. Tu configuración real va en `.env`, que no se sube a git.
@@ -215,3 +221,47 @@ Ejemplo: desde el celular envías `POST https://tu-url/suma` con `{"a": 3, "b": 
 8. **Vuelta.** La respuesta recorre el mismo camino al revés: Uvicorn, agente del túnel, Cloudflare/ngrok, celular.
 
 En `/process` el recorrido es el mismo hasta el paso 6. **SQLAlchemy** entra en el paso 7: con los datos ya validados, la función crea un objeto `Persona`, y `db.commit()` ejecuta el `INSERT` en la tabla `personas`. La base de datos genera el `id` y la función lo devuelve con `201`.
+
+## 7. `/ai_validator`: Lightpanda, LLM y webhook
+
+Flujo asíncrono: la API responde `202` en el acto y hace el trabajo en segundo plano.
+
+```text
+POST /ai_validator {url, webhook_url}  ->  202 {"id": 3, "estado": "pendiente"}
+   en segundo plano:
+   1. Lightpanda abre la página, ejecuta su JavaScript y devuelve el DOM
+   2. El LLM de OpenRouter saca la ficha del producto
+   3. Se guarda en la tabla validaciones (pendiente -> procesando -> completado o fallido)
+   4. Se envía el resultado a webhook_url, firmado con WEBHOOK_SECRET (hasta 3 intentos)
+```
+
+Requisitos en `.env`: `OPENROUTER_API_KEY`, `LIGHTPANDA_CDP_URL`, `WEBHOOK_SECRET` y, para probar con `/webhook_demo`, `PERMITIR_WEBHOOK_LOCAL=true`.
+
+Arranca Lightpanda (necesita Docker Desktop abierto):
+
+```powershell
+docker compose up -d
+```
+
+Prueba desde `/docs` o `/scalar` con:
+
+```json
+{
+  "url": "https://www.amd.com/es/products/graphics/desktops/radeon/7000-series/amd-radeon-rx-7600-xt.html",
+  "webhook_url": "http://127.0.0.1:8000/webhook_demo"
+}
+```
+
+Mira el resultado:
+
+```powershell
+psql -U postgres -h localhost -d practica -c "SELECT id, estado, webhook_estado FROM validaciones ORDER BY id;"
+psql -U postgres -h localhost -d practica -c "SELECT id, trabajo_id, firma_valida, recibido_en FROM webhooks_recibidos ORDER BY id;"
+```
+
+**Verificar la firma del webhook.** Quien recibe el aviso calcula `HMAC-SHA256(WEBHOOK_SECRET, cuerpo)` y lo compara con la cabecera `X-Firma-Sha256`. Si coincide, el aviso viene de esta API y no fue modificado. `/webhook_demo` hace exactamente eso.
+
+Limitaciones:
+
+- El trabajo corre dentro del mismo proceso de Uvicorn (`BackgroundTasks`). Si apagas o reinicias la API mientras un trabajo está `procesando`, ese trabajo se pierde y queda en ese estado. En producción se usa una cola de trabajos (por ejemplo Celery o RQ).
+- `PERMITIR_WEBHOOK_LOCAL=true` es solo para desarrollo. Con la API expuesta por el túnel, déjalo en `false`.
