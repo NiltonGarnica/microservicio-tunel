@@ -1,0 +1,16 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pydantic[email]>=2.7,<3
+SQLAlchemy>=2.0,<3
+python-dotenv>=1.0,<2
+
+# --- Drivers de base de datos (SQLite no necesita ninguno) ---
+# PostgreSQL:
+psycopg[binary]>=3.1,<4
+#
+# MySQL o MariaDB (el mismo driver sirve para los dos). Descomenta si lo usas:
+# PyMySQL[rsa]>=1.1,<2
+
+# --- Pruebas ---
+pytest>=8,<10
+httpx>=0.27,<1

@@ -1,0 +1,13 @@
+# Secretos
+.env
+
+# Entorno virtual y cachés de Python
+.venv/
+__pycache__/
+*.pyc
+
+# Base de datos local de SQLite
+*.db
+
+# Caché de pytest
+.pytest_cache/
