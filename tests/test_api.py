@@ -256,3 +256,19 @@ def test_extrae_solo_el_texto_visible():
         "<body><script>var x=1</script><p>16 GB  GDDR6</p></body></html>"
     )
     assert ai_validator.texto_visible(html) == "16 GB GDDR6"
+
+
+def test_get_webhook_demo_muestra_lo_que_guardo_el_post(cliente):
+    import ai_validator
+
+    for trabajo in (1, 2):
+        cuerpo = json.dumps({"id": trabajo, "estado": "completado"}).encode()
+        cliente.post("/webhook_demo", content=cuerpo, headers={"X-Firma-Sha256": ai_validator.firmar(cuerpo)})
+
+    assert cliente.get("/webhook_demo").status_code == 401  # pide el Bearer token
+    r = cliente.get("/webhook_demo", headers=AUTH)
+    assert r.status_code == 200
+    avisos = r.json()
+    assert [a["trabajo_id"] for a in avisos] == [2, 1]  # el más nuevo primero
+    assert avisos[0]["firma_valida"] is True
+    assert avisos[0]["cuerpo"]["estado"] == "completado"

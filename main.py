@@ -6,9 +6,10 @@ import math
 import os
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -155,6 +156,16 @@ class TrabajoCreado(BaseModel):
     consultar_en: str
 
 
+class AvisoRecibido(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trabajo_id: int | None
+    firma_valida: bool
+    recibido_en: datetime
+    cuerpo: dict
+
+
 class TrabajoEstado(BaseModel):
     # from_attributes: se puede crear directamente desde un objeto del ORM (Validacion).
     model_config = ConfigDict(from_attributes=True)
@@ -173,7 +184,7 @@ class TrabajoEstado(BaseModel):
 # ---------- Rutas ----------
 
 
-@app.get("/health", tags=["público"])
+@app.get("/health", tags=["public"], summary="Health check")
 def health():
     return {"status": "ok"}
 
@@ -188,7 +199,8 @@ def scalar():
 @app.post(
     "/suma",
     response_model=SumaSalida,
-    tags=["protegido"],
+    tags=["protected"],
+    summary="Add two numbers",
     dependencies=[Depends(verificar_token)],
 )
 def suma(datos: SumaEntrada):
@@ -206,7 +218,8 @@ def suma(datos: SumaEntrada):
     "/process",
     response_model=PersonaCreada,
     status_code=status.HTTP_201_CREATED,
-    tags=["protegido"],
+    tags=["protected"],
+    summary="Create person",
     dependencies=[Depends(verificar_token)],
 )
 def process(datos: PersonaEntrada, db: Annotated[Session, Depends(get_db)]):
@@ -220,7 +233,8 @@ def process(datos: PersonaEntrada, db: Annotated[Session, Depends(get_db)]):
     "/ai_validator",
     response_model=TrabajoCreado,
     status_code=status.HTTP_202_ACCEPTED,
-    tags=["protegido"],
+    tags=["protected"],
+    summary="Validate product with AI",
     dependencies=[Depends(verificar_token)],
     responses={422: {"description": "La URL o el webhook no son válidos"}},
 )
@@ -252,7 +266,8 @@ def validar_con_ia(
 @app.get(
     "/ai_validator/{trabajo_id}",
     response_model=TrabajoEstado,
-    tags=["protegido"],
+    tags=["protected"],
+    summary="Get validation status",
     dependencies=[Depends(verificar_token)],
 )
 def estado_de_validacion(trabajo_id: int, db: Annotated[Session, Depends(get_db)]):
@@ -266,7 +281,7 @@ def estado_de_validacion(trabajo_id: int, db: Annotated[Session, Depends(get_db)
 # ---------- Receptor de prueba ----------
 
 
-@app.post("/webhook_demo", tags=["webhook de prueba"], status_code=200)
+@app.post("/webhook_demo", tags=["demo webhook"], summary="Receive webhook", status_code=200)
 async def recibir_webhook(
     request: Request,
     x_firma_sha256: Annotated[str | None, Header()] = None,
@@ -299,3 +314,18 @@ async def recibir_webhook(
     if not firma_valida:
         raise HTTPException(status_code=401, detail="Firma inválida")
     return {"recibido": True}
+
+
+@app.get(
+    "/webhook_demo",
+    response_model=list[AvisoRecibido],
+    tags=["demo webhook"],
+    summary="List received webhooks",
+    dependencies=[Depends(verificar_token)],
+)
+def ver_webhooks_recibidos(
+    db: Annotated[Session, Depends(get_db)],
+    limite: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    """Muestra los últimos avisos que llegaron a POST /webhook_demo (el más nuevo primero)."""
+    return db.query(WebhookRecibido).order_by(WebhookRecibido.id.desc()).limit(limite).all()
