@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 # Carga las variables de .env (si existe) antes de leer la configuración.
@@ -58,6 +58,9 @@ class Validacion(Base):
     ficha: Mapped[dict | None] = mapped_column(JSON)
     error: Mapped[str | None] = mapped_column(Text)
     modelo_llm: Mapped[str | None] = mapped_column(String(120))
+    # SHA-256 del texto de la página + modelo + versión de las instrucciones.
+    # Misma huella = misma entrada al LLM, así que se reutiliza la ficha guardada.
+    huella: Mapped[str | None] = mapped_column(String(64))
     webhook_estado: Mapped[str | None] = mapped_column(String(300))
     webhook_intentos: Mapped[int] = mapped_column(Integer, default=0)
     creado_en: Mapped[datetime] = mapped_column(
@@ -81,8 +84,14 @@ class WebhookRecibido(Base):
 
 
 def crear_tablas() -> None:
-    """Crea las tablas que falten. No modifica las que ya existen."""
+    """Crea las tablas que falten y agrega columnas nuevas a las que ya existen."""
     Base.metadata.create_all(bind=engine)
+    # create_all no toca tablas existentes: las bases creadas antes de la
+    # columna `huella` la reciben aquí (vale para SQLite, PostgreSQL y MySQL).
+    columnas = {c["name"] for c in inspect(engine).get_columns("validaciones")}
+    if "huella" not in columnas:
+        with engine.begin() as conexion:
+            conexion.execute(text("ALTER TABLE validaciones ADD COLUMN huella VARCHAR(64)"))
 
 
 def get_db():

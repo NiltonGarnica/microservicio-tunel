@@ -272,3 +272,84 @@ def test_get_webhook_demo_muestra_lo_que_guardo_el_post(cliente):
     assert [a["trabajo_id"] for a in avisos] == [2, 1]  # el más nuevo primero
     assert avisos[0]["firma_valida"] is True
     assert avisos[0]["cuerpo"]["estado"] == "completado"
+
+
+# ---------- Misma página, misma ficha ----------
+
+
+def _validar(cliente):
+    r = cliente.post("/ai_validator", json={"url": URL_PRODUCTO, "webhook_url": WEBHOOK}, headers=AUTH)
+    return cliente.get(f"/ai_validator/{r.json()['id']}", headers=AUTH).json()
+
+
+def test_misma_pagina_reutiliza_la_ficha_sin_llamar_al_llm(ia_simulada, monkeypatch):
+    import ai_validator
+
+    cliente, _ = ia_simulada
+    llamadas = []
+
+    def llm_que_varia(url, texto):
+        # Simula al LLM real: cada llamada devuelve una cantidad distinta.
+        llamadas.append(texto)
+        especificaciones = [{"nombre": f"Dato {i}", "valor": "x"} for i in range(24 + 3 * len(llamadas))]
+        return ai_validator.FichaProducto(**{**FICHA, "especificaciones": especificaciones})
+
+    monkeypatch.setattr(ai_validator, "pedir_ficha", llm_que_varia)
+    primero, segundo = _validar(cliente), _validar(cliente)
+
+    assert len(llamadas) == 1  # la segunda vez no se llamó al LLM
+    assert segundo["ficha"] == primero["ficha"]
+    assert len(segundo["ficha"]["especificaciones"]) == 27
+
+
+def test_si_la_pagina_cambia_se_vuelve_a_llamar_al_llm(ia_simulada, monkeypatch):
+    import ai_validator
+
+    cliente, _ = ia_simulada
+    llamadas = []
+    textos = iter(["Precio $329", "Precio $299"])
+    monkeypatch.setattr(ai_validator, "obtener_dom", lambda url: (url, next(textos)))
+    monkeypatch.setattr(
+        ai_validator, "pedir_ficha", lambda url, texto: llamadas.append(texto) or ai_validator.FichaProducto(**FICHA)
+    )
+    _validar(cliente)
+    _validar(cliente)
+    assert llamadas == ["Precio $329", "Precio $299"]
+
+
+def test_un_trabajo_fallido_no_se_reutiliza(ia_simulada, monkeypatch):
+    import ai_validator
+
+    cliente, _ = ia_simulada
+    respuestas = iter([ai_validator.ErrorDelLLM("OpenRouter respondió HTTP 500"), ai_validator.FichaProducto(**FICHA)])
+
+    def llm(url, texto):
+        r = next(respuestas)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(ai_validator, "pedir_ficha", llm)
+    assert _validar(cliente)["estado"] == "fallido"
+    assert _validar(cliente)["estado"] == "completado"
+
+
+def test_crear_tablas_agrega_la_columna_huella_a_una_base_antigua(tmp_path, monkeypatch):
+    import sqlite3
+
+    ruta = tmp_path / "antigua.db"
+    with sqlite3.connect(ruta) as con:
+        con.execute("CREATE TABLE validaciones (id INTEGER PRIMARY KEY, url TEXT, webhook_url TEXT, estado VARCHAR(20))")
+        con.execute("INSERT INTO validaciones (url, webhook_url, estado) VALUES ('u', 'w', 'completado')")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{ruta}")
+    sys.modules.pop("database", None)
+    import database
+
+    database.crear_tablas()
+    database.crear_tablas()  # una segunda vez no falla
+    with sqlite3.connect(ruta) as con:
+        columnas = [fila[1] for fila in con.execute("PRAGMA table_info(validaciones)")]
+        filas = con.execute("SELECT COUNT(*) FROM validaciones").fetchone()[0]
+    database.engine.dispose()
+    assert "huella" in columnas
+    assert filas == 1  # los datos anteriores siguen ahí

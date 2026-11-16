@@ -263,6 +263,12 @@ psql -U postgres -h localhost -d practica -c "SELECT id, trabajo_id, firma_valid
 
 **Verificar la firma del webhook.** Quien recibe el aviso calcula `HMAC-SHA256(WEBHOOK_SECRET, cuerpo)` y lo compara con la cabecera `X-Firma-Sha256`. Si coincide, el aviso viene de esta API y no fue modificado. `/webhook_demo` hace exactamente eso.
 
+**Misma página, misma ficha.** El LLM no responde siempre igual aunque reciba el mismo texto (con las instrucciones anteriores, la misma página daba entre 26 y 34 especificaciones). Por eso:
+
+- Se le piden **todas** las especificaciones en el orden de la página, no "las más importantes".
+- Se guarda una huella (`huella`, SHA-256 del texto de la página, el modelo y `VERSION_EXTRACCION`). Si llega la misma URL con la misma huella, se devuelve la ficha ya guardada sin llamar al LLM. Si la página cambia, la huella cambia y se vuelve a llamar.
+- Si cambias `INSTRUCCIONES` o `ESQUEMA_FICHA`, sube `VERSION_EXTRACCION` en `ai_validator.py` para no reutilizar fichas antiguas.
+
 Limitaciones:
 
 - El trabajo corre dentro del mismo proceso de Uvicorn (`BackgroundTasks`). Si apagas o reinicias la API mientras un trabajo está `procesando`, ese trabajo se pierde y queda en ese estado. En producción se usa una cola de trabajos (por ejemplo Celery o RQ).
