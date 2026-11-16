@@ -1,0 +1,42 @@
+{
+  // Al abrir la carpeta se lanzan la API y el tunel de Cloudflare, cada uno en su terminal.
+  // Para usar ngrok en vez de Cloudflare: Ctrl+Shift+P > "Tasks: Run Task" > "Terminal 2: tunel ngrok".
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Terminal 1: API (Uvicorn)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always", "group": "servicio" }
+    },
+    {
+      "label": "Terminal 2: tunel Cloudflare",
+      "type": "shell",
+      "command": "cloudflared",
+      "args": ["tunnel", "--url", "http://127.0.0.1:8000"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always", "group": "servicio" }
+    },
+    {
+      "label": "Terminal 2: tunel ngrok",
+      "type": "shell",
+      "command": "ngrok",
+      "args": ["http", "8000"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "panel": "dedicated", "reveal": "always", "group": "servicio" }
+    },
+    {
+      "label": "Iniciar API y tunel",
+      "dependsOn": ["Terminal 1: API (Uvicorn)", "Terminal 2: tunel Cloudflare"],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "runOptions": { "runOn": "folderOpen" }
+    }
+  ]
+}
