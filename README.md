@@ -224,6 +224,8 @@ En `/process` el recorrido es el mismo hasta el paso 6. **SQLAlchemy** entra en 
 
 ## 7. `/ai_validator`: Lightpanda, LLM y webhook
 
+![Diagrama de flujo: túnel, /ai_validator y webhook](docs/diagrama_flujo_tunel_webhook.png)
+
 Flujo asíncrono: la API responde `202` en el acto y hace el trabajo en segundo plano.
 
 ```text
