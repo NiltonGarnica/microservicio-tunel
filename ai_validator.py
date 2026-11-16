@@ -26,6 +26,7 @@ from database import SessionLocal, Validacion
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_TEXTO = 40_000  # caracteres de la página que se envían al LLM
+MAX_TOKENS_LLM = 16_000  # tope de la respuesta del LLM, razonamiento incluido
 ESPERA_PAGINA_MS = 30_000  # tiempo máximo para que Lightpanda cargue la página
 REINTENTOS_WEBHOOK = 3
 # Súbela cuando cambien INSTRUCCIONES o ESQUEMA_FICHA: así no se reutilizan
@@ -250,7 +251,9 @@ def pedir_ficha(url: str, texto: str) -> FichaProducto:
             "json_schema": {"name": "ficha_producto", "strict": True, "schema": ESQUEMA_FICHA},
         },
         "temperature": 0,
-        "max_tokens": 4000,  # con todas las especificaciones la respuesta es más larga
+        # Incluye el razonamiento interno del modelo (unos 2000 tokens) más la ficha.
+        # Con 4000 la ficha de páginas grandes llegaba cortada.
+        "max_tokens": MAX_TOKENS_LLM,
     }
     try:
         respuesta = httpx.post(
@@ -270,7 +273,15 @@ def pedir_ficha(url: str, texto: str) -> FichaProducto:
         raise ErrorDelLLM(f"OpenRouter respondió HTTP {respuesta.status_code}. {detalle}".strip())
 
     try:
-        contenido = respuesta.json()["choices"][0]["message"]["content"]
+        eleccion = respuesta.json()["choices"][0]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ErrorDelLLM("El LLM no devolvió una ficha con el formato esperado") from exc
+    if eleccion.get("finish_reason") == "length":
+        raise ErrorDelLLM(
+            f"La respuesta del LLM se cortó al llegar al límite de {MAX_TOKENS_LLM} tokens"
+        )
+    try:
+        contenido = eleccion["message"]["content"]
         return FichaProducto.model_validate(json.loads(contenido))
     except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
         raise ErrorDelLLM("El LLM no devolvió una ficha con el formato esperado") from exc

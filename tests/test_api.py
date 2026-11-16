@@ -353,3 +353,19 @@ def test_crear_tablas_agrega_la_columna_huella_a_una_base_antigua(tmp_path, monk
     database.engine.dispose()
     assert "huella" in columnas
     assert filas == 1  # los datos anteriores siguen ahí
+
+
+def test_respuesta_cortada_del_llm_da_un_error_claro(monkeypatch):
+    import httpx
+
+    import ai_validator
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "clave-de-prueba")
+    respuesta = httpx.Response(
+        200,
+        json={"choices": [{"finish_reason": "length", "message": {"content": '{"es_producto": true, "nom'}}]},
+        request=httpx.Request("POST", ai_validator.OPENROUTER_URL),
+    )
+    monkeypatch.setattr(ai_validator.httpx, "post", lambda *a, **k: respuesta)
+    with pytest.raises(ai_validator.ErrorDelLLM, match="se cortó"):
+        ai_validator.pedir_ficha(URL_PRODUCTO, "texto")
